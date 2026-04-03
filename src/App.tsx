@@ -2,8 +2,10 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { Upload, Plus, Trash2, RefreshCw, Trophy, AlertCircle, CheckCircle2, Settings, List, LayoutList, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Athlete, StravaRecord } from './types';
-import { INITIAL_ATHLETES, calculateTotal } from './data/mockData';
+import { calculateTotal } from './data/mockData';
 import { extractStravaData } from './lib/gemini';
+import { collection, doc, setDoc, deleteDoc, onSnapshot, getDocs, getDocFromServer } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from './lib/firebase';
 
 const getWeekInfo = (weekKey: string) => {
   const weekNum = parseInt(weekKey.replace(/[^0-9]/g, ''));
@@ -21,14 +23,7 @@ const getWeekInfo = (weekKey: string) => {
 };
 
 export default function App() {
-  const [athletes, setAthletes] = useState<Athlete[]>(() => {
-    try {
-      const saved = localStorage.getItem('strava_athletes');
-      return saved ? JSON.parse(saved) : INITIAL_ATHLETES;
-    } catch (e) {
-      return INITIAL_ATHLETES;
-    }
-  });
+  const [athletes, setAthletes] = useState<Athlete[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -41,10 +36,31 @@ export default function App() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Save to localStorage whenever data changes
+  // Load data from Firestore
   useEffect(() => {
-    localStorage.setItem('strava_athletes', JSON.stringify(athletes));
-  }, [athletes]);
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if(error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration. ");
+        }
+      }
+    }
+    testConnection();
+
+    const unsubscribe = onSnapshot(collection(db, 'athletes'), (snapshot) => {
+      const loadedAthletes: Athlete[] = [];
+      snapshot.forEach((doc) => {
+        loadedAthletes.push({ id: doc.id, ...doc.data() } as Athlete);
+      });
+      setAthletes(loadedAthletes);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'athletes');
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('strava_current_week', currentWeek);
@@ -93,7 +109,7 @@ export default function App() {
             throw new Error("AI could not find any leaderboard data in the image.");
           }
 
-          processExtractedData(extractedData);
+          await processExtractedData(extractedData);
           setSuccessMsg(`Successfully processed ${extractedData.length} records for week ${currentWeek}!`);
           
           // Auto-increment week for next time
@@ -117,44 +133,56 @@ export default function App() {
     }
   };
 
-  const processExtractedData = (records: StravaRecord[]) => {
-    setAthletes(prevAthletes => {
-      const updatedAthletes = [...prevAthletes];
+  const processExtractedData = async (records: StravaRecord[]) => {
+    const promises = [];
+    const currentAthletes = [...athletes];
 
-      records.forEach(record => {
-        // Find existing athlete by checking aliases
-        let athleteIndex = updatedAthletes.findIndex(a => 
-          a.stravaNames.some(name => name.toLowerCase() === record.stravaName.toLowerCase())
+    for (const record of records) {
+      let athlete = currentAthletes.find(a => 
+        a.stravaNames.some(name => name.toLowerCase() === record.stravaName.toLowerCase())
+      );
+
+      if (athlete) {
+        const updatedAthlete = { ...athlete };
+        updatedAthlete.weeklyData = { ...updatedAthlete.weeklyData, [currentWeek]: record.distance };
+        updatedAthlete.total = calculateTotal(updatedAthlete.weeklyData);
+        promises.push(
+          setDoc(doc(db, 'athletes', updatedAthlete.id), updatedAthlete)
+            .catch(e => handleFirestoreError(e, OperationType.UPDATE, `athletes/${updatedAthlete.id}`))
         );
+      } else {
+        const newId = Date.now().toString() + Math.random().toString(36).substring(7);
+        const newAthlete: Athlete = {
+          id: newId,
+          name: record.stravaName,
+          stravaNames: [record.stravaName],
+          weeklyData: { [currentWeek]: record.distance },
+          total: record.distance
+        };
+        currentAthletes.push(newAthlete);
+        promises.push(
+          setDoc(doc(db, 'athletes', newId), newAthlete)
+            .catch(e => handleFirestoreError(e, OperationType.CREATE, `athletes/${newId}`))
+        );
+      }
+    }
 
-        if (athleteIndex >= 0) {
-          // Update existing
-          const athlete = { ...updatedAthletes[athleteIndex] };
-          athlete.weeklyData = { ...athlete.weeklyData, [currentWeek]: record.distance };
-          athlete.total = calculateTotal(athlete.weeklyData);
-          updatedAthletes[athleteIndex] = athlete;
-        } else {
-          // Create new athlete
-          const newAthlete: Athlete = {
-            id: Date.now().toString() + Math.random().toString(36).substring(7),
-            name: record.stravaName, // Default name to strava name
-            stravaNames: [record.stravaName],
-            weeklyData: { [currentWeek]: record.distance },
-            total: record.distance
-          };
-          updatedAthletes.push(newAthlete);
-        }
-      });
-
-      return updatedAthletes;
-    });
+    await Promise.all(promises);
   };
 
-  const handleClearData = () => {
-    setAthletes([]);
-    setShowClearConfirm(false);
-    setSuccessMsg("Semua data berhasil dikosongkan. Silakan mulai dari P1.");
-    setCurrentWeek('P1');
+  const handleClearData = async () => {
+    try {
+      const snapshot = await getDocs(collection(db, 'athletes'));
+      const promises = snapshot.docs.map(docSnapshot => deleteDoc(doc(db, 'athletes', docSnapshot.id)));
+      await Promise.all(promises);
+      
+      setShowClearConfirm(false);
+      setSuccessMsg("Semua data berhasil dikosongkan. Silakan mulai dari P1.");
+      setCurrentWeek('P1');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'athletes');
+      setError("Gagal mengosongkan data dari database.");
+    }
   };
 
   return (
