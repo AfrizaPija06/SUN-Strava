@@ -12,7 +12,7 @@ export const extractStravaData = async (base64Image: string, mimeType: string): 
     const ai = new GoogleGenAI({ apiKey });
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-pro-preview', // Updated to latest pro model
+      model: 'gemini-3-flash-preview', // Changed to flash to ensure free tier compatibility
       contents: [
         {
           inlineData: {
