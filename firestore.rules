@@ -2,33 +2,9 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default deny for safety
+    // Allow all reads and writes for simplicity in this public sport monitoring app
     match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Explicitly allow all operations on the athletes collection for public access
-    match /athletes/{athleteId} {
       allow read, write: if true;
-    }
-
-    // Explicitly allow all operations on the dailyRecaps collection for public access
-    match /dailyRecaps/{recapId} {
-      allow read, write: if true;
-    }
-    
-    // Support for top-level collection queries
-    match /athletes {
-      allow read, write: if true;
-    }
-
-    match /dailyRecaps {
-      allow read, write: if true;
-    }
-
-    // For the test connection
-    match /test/connection {
-      allow read: if true;
     }
   }
 }
