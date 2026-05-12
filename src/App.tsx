@@ -5,7 +5,7 @@ import { Athlete, StravaRecord, DailyRecap } from './types';
 import { calculateTotal } from './data/mockData';
 import { extractStravaData } from './lib/gemini';
 import { collection, doc, setDoc, deleteDoc, onSnapshot, getDocs, getDocFromServer } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from './lib/firebase';
+import { db, formatFirestoreError, OperationType } from './lib/firebase';
 
 const getWeekInfo = (weekKey: string) => {
   const weekNum = parseInt(weekKey.replace(/[^0-9]/g, ''));
@@ -40,10 +40,16 @@ const NAMES_LIST = [
   'ai'
 ];
 
+const getTodayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 export default function App() {
   const [athletes, setAthletes] = useState<Athlete[]>([]);
   const [dailyRecaps, setDailyRecaps] = useState<DailyRecap[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSavingRecap, setIsSavingRecap] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [currentWeek, setCurrentWeek] = useState<string>(() => {
@@ -76,7 +82,7 @@ export default function App() {
       });
       setAthletes(loadedAthletes);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'athletes');
+      setError(formatFirestoreError(error, OperationType.LIST, 'athletes'));
     });
 
     const unsubscribeRecaps = onSnapshot(collection(db, 'dailyRecaps'), (snapshot) => {
@@ -86,7 +92,7 @@ export default function App() {
       });
       setDailyRecaps(loadedRecaps);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'dailyRecaps');
+      setError(formatFirestoreError(error, OperationType.LIST, 'dailyRecaps'));
     });
 
     return () => {
@@ -181,7 +187,7 @@ export default function App() {
         updatedAthlete.total = calculateTotal(updatedAthlete.weeklyData);
         promises.push(
           setDoc(doc(db, 'athletes', updatedAthlete.id), updatedAthlete)
-            .catch(e => handleFirestoreError(e, OperationType.UPDATE, `athletes/${updatedAthlete.id}`))
+            .catch(e => setError(formatFirestoreError(e, OperationType.UPDATE, `athletes/${updatedAthlete.id}`)))
         );
       } else {
         const newId = Date.now().toString() + Math.random().toString(36).substring(7);
@@ -195,7 +201,7 @@ export default function App() {
         currentAthletes.push(newAthlete);
         promises.push(
           setDoc(doc(db, 'athletes', newId), newAthlete)
-            .catch(e => handleFirestoreError(e, OperationType.CREATE, `athletes/${newId}`))
+            .catch(e => setError(formatFirestoreError(e, OperationType.CREATE, `athletes/${newId}`)))
         );
       }
     }
@@ -220,8 +226,7 @@ export default function App() {
       
       setShowClearConfirm(false);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, activeView === 'daily' ? 'dailyRecaps' : 'athletes');
-      setError("Gagal mengosongkan data dari database.");
+      setError(formatFirestoreError(error, OperationType.DELETE, activeView === 'daily' ? 'dailyRecaps' : 'athletes'));
     }
   };
 
@@ -231,8 +236,11 @@ export default function App() {
       return;
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayStr();
     const recapId = `${selectedName.replace(/\s+/g, '-').toLowerCase()}-${today}`;
+
+    setIsSavingRecap(true);
+    setError(null);
 
     try {
       const newRecap: DailyRecap = {
@@ -247,8 +255,9 @@ export default function App() {
       setSuccessMsg(`Berhasil! ${selectedName} telah menyelesaikan plank hari ini.`);
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `dailyRecaps/${recapId}`);
-      setError("Gagal menyimpan rekap.");
+      setError(formatFirestoreError(err, OperationType.WRITE, `dailyRecaps/${recapId}`));
+    } finally {
+      setIsSavingRecap(false);
     }
   };
 
@@ -269,7 +278,7 @@ export default function App() {
   }, [getDailyStats]);
 
   const hasDoneToday = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayStr();
     const done: Record<string, boolean> = {};
     dailyRecaps.forEach(recap => {
       if (recap.date === today) {
@@ -465,21 +474,26 @@ export default function App() {
                     </div>
                     <button
                       onClick={handleMarkPlankDone}
-                      disabled={!selectedName || hasDoneToday[selectedName]}
+                      disabled={!selectedName || hasDoneToday[selectedName] || isSavingRecap}
                       className={`px-8 py-3 rounded-xl font-bold transition-all shadow-md flex items-center justify-center ${
-                        hasDoneToday[selectedName] 
+                        hasDoneToday[selectedName] || isSavingRecap
                           ? 'bg-emerald-200 text-emerald-600 cursor-not-allowed' 
                           : 'bg-emerald-600 text-white hover:bg-emerald-700 active:transform active:scale-95'
                       }`}
                     >
-                      {hasDoneToday[selectedName] ? (
+                      {isSavingRecap ? (
+                        <>
+                          <RefreshCw className="w-5 h-5 mr-2 animate-spin" />
+                          Menyimpan...
+                        </>
+                      ) : (hasDoneToday[selectedName] ? (
                         <>
                           <Check className="w-5 h-5 mr-2" />
                           Sudah Selesai
                         </>
                       ) : (
                         'Sudah Plank!'
-                      )}
+                      ))}
                     </button>
                   </div>
                   {successMsg && (

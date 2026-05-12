@@ -1,17 +1,9 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
-
-const firebaseConfig = {
-  apiKey: "AIzaSyDMzN6T6_7LAH_iXer8kITNTtzevVaQtWo",
-  authDomain: "strava-sun-sport.firebaseapp.com",
-  projectId: "strava-sun-sport",
-  storageBucket: "strava-sun-sport.firebasestorage.app",
-  messagingSenderId: "52156402153",
-  appId: "1:52156402153:web:e847e5286a197ae675e378"
-};
+import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 export enum OperationType {
   CREATE = 'create',
@@ -29,11 +21,11 @@ export interface FirestoreErrorInfo {
   authInfo: any;
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+export function formatFirestoreError(error: unknown, operationType: OperationType, path: string | null): string {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: null, // No auth used yet
+      userId: null,
       email: null,
       emailVerified: false,
       isAnonymous: false,
@@ -43,6 +35,5 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  return JSON.stringify(errInfo);
 }
