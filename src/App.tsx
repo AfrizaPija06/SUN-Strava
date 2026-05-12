@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { Upload, Plus, Trash2, RefreshCw, Trophy, AlertCircle, CheckCircle2, Settings, List, LayoutList, AlertTriangle } from 'lucide-react';
+import { Upload, Plus, Trash2, RefreshCw, Trophy, AlertCircle, CheckCircle2, Settings, List, LayoutList, AlertTriangle, Calendar, Check, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Athlete, StravaRecord } from './types';
+import { Athlete, StravaRecord, DailyRecap } from './types';
 import { calculateTotal } from './data/mockData';
 import { extractStravaData } from './lib/gemini';
 import { collection, doc, setDoc, deleteDoc, onSnapshot, getDocs, getDocFromServer } from 'firebase/firestore';
@@ -22,8 +22,27 @@ const getWeekInfo = (weekKey: string) => {
   };
 };
 
+const NAMES_LIST = [
+  'Widi',
+  'Doni',
+  'Aris',
+  'Tono',
+  'pija',
+  'ihsan',
+  'Iqbal',
+  'padan',
+  'andil',
+  'abdul',
+  'hamdan',
+  'winna',
+  'ira',
+  'itsna',
+  'ai'
+];
+
 export default function App() {
   const [athletes, setAthletes] = useState<Athlete[]>([]);
+  const [dailyRecaps, setDailyRecaps] = useState<DailyRecap[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -31,7 +50,8 @@ export default function App() {
     return localStorage.getItem('strava_current_week') || 'P7';
   });
   const [showAdmin, setShowAdmin] = useState(false);
-  const [activeView, setActiveView] = useState<'summary' | 'full'>('summary');
+  const [activeView, setActiveView] = useState<'summary' | 'full' | 'daily'>('summary');
+  const [selectedName, setSelectedName] = useState<string>('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -49,7 +69,7 @@ export default function App() {
     }
     testConnection();
 
-    const unsubscribe = onSnapshot(collection(db, 'athletes'), (snapshot) => {
+    const unsubscribeAthletes = onSnapshot(collection(db, 'athletes'), (snapshot) => {
       const loadedAthletes: Athlete[] = [];
       snapshot.forEach((doc) => {
         loadedAthletes.push({ id: doc.id, ...doc.data() } as Athlete);
@@ -59,7 +79,20 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, 'athletes');
     });
 
-    return () => unsubscribe();
+    const unsubscribeRecaps = onSnapshot(collection(db, 'dailyRecaps'), (snapshot) => {
+      const loadedRecaps: DailyRecap[] = [];
+      snapshot.forEach((doc) => {
+        loadedRecaps.push({ id: doc.id, ...doc.data() } as DailyRecap);
+      });
+      setDailyRecaps(loadedRecaps);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'dailyRecaps');
+    });
+
+    return () => {
+      unsubscribeAthletes();
+      unsubscribeRecaps();
+    };
   }, []);
 
   useEffect(() => {
@@ -172,18 +205,79 @@ export default function App() {
 
   const handleClearData = async () => {
     try {
-      const snapshot = await getDocs(collection(db, 'athletes'));
-      const promises = snapshot.docs.map(docSnapshot => deleteDoc(doc(db, 'athletes', docSnapshot.id)));
-      await Promise.all(promises);
+      if (activeView === 'daily') {
+        const snapshot = await getDocs(collection(db, 'dailyRecaps'));
+        const promises = snapshot.docs.map(docSnapshot => deleteDoc(doc(db, 'dailyRecaps', docSnapshot.id)));
+        await Promise.all(promises);
+        setSuccessMsg("Semua data rekap harian berhasil dikosongkan.");
+      } else {
+        const snapshot = await getDocs(collection(db, 'athletes'));
+        const promises = snapshot.docs.map(docSnapshot => deleteDoc(doc(db, 'athletes', docSnapshot.id)));
+        await Promise.all(promises);
+        setSuccessMsg("Semua data leaderboard berhasil dikosongkan. Silakan mulai dari P1.");
+        setCurrentWeek('P1');
+      }
       
       setShowClearConfirm(false);
-      setSuccessMsg("Semua data berhasil dikosongkan. Silakan mulai dari P1.");
-      setCurrentWeek('P1');
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'athletes');
+      handleFirestoreError(error, OperationType.DELETE, activeView === 'daily' ? 'dailyRecaps' : 'athletes');
       setError("Gagal mengosongkan data dari database.");
     }
   };
+
+  const handleMarkPlankDone = async () => {
+    if (!selectedName) {
+      setError("Silakan pilih nama terlebih dahulu.");
+      return;
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const recapId = `${selectedName.replace(/\s+/g, '-').toLowerCase()}-${today}`;
+
+    try {
+      const newRecap: DailyRecap = {
+        id: recapId,
+        name: selectedName,
+        date: today,
+        completed: true,
+        exercise: "Plank 2 Menit"
+      };
+
+      await setDoc(doc(db, 'dailyRecaps', recapId), newRecap);
+      setSuccessMsg(`Berhasil! ${selectedName} telah menyelesaikan plank hari ini.`);
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `dailyRecaps/${recapId}`);
+      setError("Gagal menyimpan rekap.");
+    }
+  };
+
+  const getDailyStats = useMemo(() => {
+    const stats: Record<string, number> = {};
+    dailyRecaps.forEach(recap => {
+      if (recap.completed) {
+        stats[recap.name] = (stats[recap.name] || 0) + 1;
+      }
+    });
+    return stats;
+  }, [dailyRecaps]);
+
+  const sortedDailyStats = useMemo(() => {
+    return Object.entries(getDailyStats)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [getDailyStats]);
+
+  const hasDoneToday = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const done: Record<string, boolean> = {};
+    dailyRecaps.forEach(recap => {
+      if (recap.date === today) {
+        done[recap.name] = true;
+      }
+    });
+    return done;
+  }, [dailyRecaps]);
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-emerald-200">
@@ -332,11 +426,175 @@ export default function App() {
                 <LayoutList className="w-4 h-4 mr-2" />
                 Data Lengkap
               </button>
+              <button
+                onClick={() => setActiveView('daily')}
+                className={`flex-1 sm:flex-none flex items-center justify-center px-5 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${
+                  activeView === 'daily' 
+                    ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-black/5' 
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50'
+                }`}
+              >
+                <Calendar className="w-4 h-4 mr-2" />
+                Rekap Plank
+              </button>
             </div>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            {activeView === 'daily' ? (
+              <div className="p-6 space-y-8">
+                {/* Daily Submission */}
+                <div className="bg-emerald-50 rounded-xl p-6 border border-emerald-100 max-w-2xl mx-auto">
+                  <h3 className="text-lg font-bold text-emerald-900 mb-4 flex items-center">
+                    <Check className="w-6 h-6 mr-2 bg-emerald-600 text-white rounded-full p-1" />
+                    Absen Plank Hari Ini (2 Menit)
+                  </h3>
+                  <div className="flex flex-col sm:flex-row gap-4 items-end">
+                    <div className="flex-1 w-full">
+                      <label className="block text-sm font-medium text-emerald-800 mb-1">Pilih Nama</label>
+                      <select 
+                        value={selectedName}
+                        onChange={(e) => setSelectedName(e.target.value)}
+                        className="w-full px-4 py-3 bg-white border border-emerald-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none shadow-sm transition-all"
+                      >
+                        <option value="">-- Pilih Nama Anda --</option>
+                        {NAMES_LIST.map(name => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      onClick={handleMarkPlankDone}
+                      disabled={!selectedName || hasDoneToday[selectedName]}
+                      className={`px-8 py-3 rounded-xl font-bold transition-all shadow-md flex items-center justify-center ${
+                        hasDoneToday[selectedName] 
+                          ? 'bg-emerald-200 text-emerald-600 cursor-not-allowed' 
+                          : 'bg-emerald-600 text-white hover:bg-emerald-700 active:transform active:scale-95'
+                      }`}
+                    >
+                      {hasDoneToday[selectedName] ? (
+                        <>
+                          <Check className="w-5 h-5 mr-2" />
+                          Sudah Selesai
+                        </>
+                      ) : (
+                        'Sudah Plank!'
+                      )}
+                    </button>
+                  </div>
+                  {successMsg && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="mt-4 p-3 bg-white/50 text-emerald-800 rounded-lg text-sm border border-emerald-100 flex items-center"
+                    >
+                      <CheckCircle2 className="w-4 h-4 mr-2" />
+                      {successMsg}
+                    </motion.div>
+                  )}
+                  {error && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="mt-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm border border-red-100 flex items-center"
+                    >
+                      <AlertCircle className="w-4 h-4 mr-2" />
+                      {error}
+                    </motion.div>
+                  )}
+                </div>
+
+                {/* Daily Monitoring (Sudah vs Belum) */}
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center px-4">
+                    <Calendar className="w-6 h-6 mr-2 text-emerald-600" />
+                    Pemantauan Harian: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  </h3>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 px-4">
+                    {NAMES_LIST.map((name, idx) => {
+                      const isDone = hasDoneToday[name];
+                      return (
+                        <motion.div 
+                          key={name}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: idx * 0.03 }}
+                          className={`p-4 rounded-2xl border flex items-center justify-between transition-all ${
+                            isDone 
+                              ? 'bg-emerald-50 border-emerald-200 shadow-sm' 
+                              : 'bg-white border-gray-100'
+                          }`}
+                        >
+                          <div className="flex items-center space-x-3">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
+                              isDone ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-400'
+                            }`}>
+                              {isDone ? <Check className="w-4 h-4" /> : idx + 1}
+                            </div>
+                            <span className={`font-semibold ${isDone ? 'text-emerald-900' : 'text-gray-600'}`}>
+                              {name}
+                            </span>
+                          </div>
+                          <div className={`text-[10px] uppercase font-black px-2 py-1 rounded-md ${
+                            isDone 
+                              ? 'bg-emerald-200 text-emerald-700' 
+                              : 'bg-gray-100 text-gray-400'
+                          }`}>
+                            {isDone ? 'Selesai' : 'Belum'}
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* All-time Stats (Optional Leaderboard move to bottom) */}
+                <div className="px-4 pt-8 border-t border-gray-100">
+                  <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+                    <Trophy className="w-5 h-5 mr-2 text-yellow-500" />
+                    Total Plank Terbanyak (All-Time)
+                  </h3>
+                  <div className="flex flex-wrap gap-3">
+                    {sortedDailyStats.map((stat, idx) => (
+                      <div key={stat.name} className="bg-white border border-gray-100 px-4 py-2 rounded-xl shadow-sm flex items-center space-x-2">
+                        <span className="text-gray-400 font-bold">#{idx + 1}</span>
+                        <span className="font-semibold text-gray-700">{stat.name}</span>
+                        <span className="bg-emerald-100 text-emerald-700 font-black text-xs px-2 py-0.5 rounded-full">
+                          {stat.count}x
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Timeline / Recent Activity */}
+                <div className="px-4">
+                  <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+                    <User className="w-5 h-5 mr-2 text-gray-400" />
+                    Aktivitas Terbaru
+                  </h3>
+                  <div className="space-y-3">
+                    {dailyRecaps
+                      .sort((a, b) => b.date.localeCompare(a.date))
+                      .slice(0, 10)
+                      .map((recap, idx) => (
+                        <div key={recap.id} className="flex items-center space-x-3 text-sm text-gray-600 bg-gray-50 p-3 rounded-lg border border-gray-100">
+                          <div className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center">
+                            <Check className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="font-bold text-gray-900">{recap.name}</span>
+                            <span> menyelesaikan {recap.exercise}</span>
+                            <span className="text-gray-400"> • {recap.date}</span>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-white border-b border-gray-200 text-sm font-semibold text-gray-500 uppercase tracking-wider">
                   <th className="py-4 px-4 text-center w-16">Rank</th>
@@ -404,6 +662,7 @@ export default function App() {
                 </AnimatePresence>
               </tbody>
             </table>
+            )}
           </div>
         </section>
 

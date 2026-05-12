@@ -6,7 +6,10 @@ export type Athlete = {
   total: number;
 };
 
-export type StravaRecord = {
-  stravaName: string;
-  distance: number;
+export type DailyRecap = {
+  id: string;
+  name: string;
+  date: string; // YYYY-MM-DD
+  completed: boolean;
+  exercise: string; // e.g., "Plank 2 Menit"
 };

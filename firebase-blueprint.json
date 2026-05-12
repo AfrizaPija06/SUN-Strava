@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "Athlete": {
+      "title": "Athlete Leaderboard Data",
+      "description": "Stores cumulative Strava running data for athletes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "stravaNames": { "type": "array" },
+        "weeklyData": { "type": "object" },
+        "total": { "type": "number" }
+      },
+      "required": ["id", "name", "total"]
+    },
+    "DailyRecap": {
+      "title": "Daily Exercise Recap",
+      "description": "Daily monitoring of exercises like Plank",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "date": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "exercise": { "type": "string" }
+      },
+      "required": ["id", "name", "date", "completed"]
+    }
+  },
+  "firestore": {
+    "/athletes/{athleteId}": {
+      "schema": "Athlete",
+      "description": "Collection of running statistics for athletes"
+    },
+    "/dailyRecaps/{recapId}": {
+      "schema": "DailyRecap",
+      "description": "Daily progress tracking for specific exercises"
+    }
+  }
+}
